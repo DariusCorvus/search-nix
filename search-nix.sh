@@ -7,6 +7,18 @@ ES_PASS="X8gPHnzL52wFEekuxsfQ9cSh"
 ES_SCHEMA="44"
 SIZE=20
 CHANNEL=""
+VERBOSE=0
+
+# ── color support ────────────────────────────────────────────────────────────
+if [[ -t 1 ]]; then
+  BOLD=$'\e[1m'  DIM=$'\e[2m'  RESET=$'\e[0m'  UL=$'\e[4m'
+  CYAN=$'\e[36m' GREEN=$'\e[32m' YELLOW=$'\e[33m' MAGENTA=$'\e[35m'
+  HAS_COLOR=1
+else
+  BOLD="" DIM="" RESET="" UL=""
+  CYAN="" GREEN="" YELLOW="" MAGENTA=""
+  HAS_COLOR=0
+fi
 
 # ── usage ─────────────────────────────────────────────────────────────────────
 usage() {
@@ -17,10 +29,12 @@ Options:
   -c, --channel <channel>   Channel to search (unstable, 25.11, 24.11, ...)
                             Default: auto-detected from nixos-version
   -n, --size <n>            Number of results (default: 20, max: 50)
+  -v, --verbose             Show full output (homepage, license, programs)
   -h, --help                Show this help
 
 Examples:
   nix-search fuser
+  nix-search -v fuser
   nix-search -n 5 python linter
   nix-search -c unstable ffmpeg
 EOF
@@ -33,6 +47,7 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     -c|--channel) CHANNEL="$2"; shift 2 ;;
     -n|--size)    SIZE="$2";    shift 2 ;;
+    -v|--verbose) VERBOSE=1;    shift ;;
     -h|--help)    usage ;;
     *) POSITIONAL+=("$1"); shift ;;
   esac
@@ -122,11 +137,14 @@ PAYLOAD=$(jq -nc \
     }
   }')
 
+START_TIME=$(date +%s%N)
 RESPONSE=$(curl -s \
   -u "${ES_USER}:${ES_PASS}" \
   -H "Content-Type: application/json" \
   -X POST "$BACKEND" \
   -d "$PAYLOAD")
+END_TIME=$(date +%s%N)
+ELAPSED_MS=$(( (END_TIME - START_TIME) / 1000000 ))
 
 # ── error check ───────────────────────────────────────────────────────────────
 if echo "$RESPONSE" | jq -e '.error' &>/dev/null; then
@@ -141,29 +159,75 @@ if [[ "$TOTAL" -eq 0 ]]; then
   exit 0
 fi
 
-# ── output ────────────────────────────────────────────────────────────────────
-echo "channel: ${CHANNEL}  query: '${QUERY}'  showing $(echo "$RESPONSE" | jq '.hits.hits | length') of ${TOTAL} results"
-echo
+COUNT=$(echo "$RESPONSE" | jq '.hits.hits | length')
 
-echo "$RESPONSE" | jq -r '
-  [.hits.hits[]._source] | reverse | .[] |
-  [
-    "pkg      \(.package_attr_name)  \(.package_version // "?")",
-    "desc     \(.package_description // "-")",
-    if (.package_programs | length) > 0
-      then "programs \(.package_programs | join("  "))"
-      else empty
-    end,
-    if (.package_homepage | type) == "array"
-      then "home     \(.package_homepage[0])"
-    elif .package_homepage
-      then "home     \(.package_homepage)"
-      else empty
-    end,
-    if (.package_license_set | length) > 0
-      then "license  \([.package_license_set[] | if type == "object" then (.spdxId // .fullName) else . end] | map(select(. != null)) | join(", "))"
-      else empty
-    end,
-    ""
-  ] | .[]
-'
+# ── output ────────────────────────────────────────────────────────────────────
+highlight_query() {
+  if [[ "$HAS_COLOR" -eq 1 ]]; then
+    # Escape regex special chars in query, highlight case-insensitively
+    local escaped
+    escaped=$(printf '%s' "$QUERY" | sed 's/[&/\]/\\&/g; s/[[\.*^$()+?{}|]/\\&/g')
+    sed "s/${escaped}/${BOLD}${UL}&${RESET}/gI"
+  else
+    cat
+  fi
+}
+
+if [[ "$VERBOSE" -eq 1 ]]; then
+  # ── verbose output ──────────────────────────────────────────────────────────
+  echo "$RESPONSE" | jq -r \
+    --arg bold "$BOLD" --arg dim "$DIM" --arg reset "$RESET" \
+    --arg cyan "$CYAN" --arg green "$GREEN" --arg yellow "$YELLOW" --arg magenta "$MAGENTA" \
+    --argjson total_count "$COUNT" \
+    '
+    [.hits.hits[]._source] | reverse | to_entries | .[] |
+    .key as $i | .value as $p |
+    ($total_count - $i) as $num |
+    [
+      "\($dim)───\($reset)",
+      "\($cyan)[\($num)]\($reset)  \($bold)\($green)\($p.package_attr_name)\($reset)  \($dim)\($p.package_version // "?")\($reset)",
+      "     \($p.package_description // "-")",
+      if ($p.package_programs | length) > 0
+        then "     \($magenta)programs\($reset) \($p.package_programs | join("  "))"
+        else empty
+      end,
+      if ($p.package_homepage | type) == "array"
+        then "     \($yellow)home\($reset)     \($p.package_homepage[0])"
+      elif $p.package_homepage
+        then "     \($yellow)home\($reset)     \($p.package_homepage)"
+        else empty
+      end,
+      if ($p.package_license_set | length) > 0
+        then "     \($yellow)license\($reset)  \([.value.package_license_set[] | if type == "object" then (.spdxId // .fullName) else . end] | map(select(. != null)) | join(", "))"
+        else empty
+      end,
+      if $num == 1
+        then "     \($dim)nix-env -iA nixpkgs.\($p.package_attr_name)\($reset)"
+        else empty
+      end
+    ] | .[]
+    ' | highlight_query
+else
+  # ── compact output ──────────────────────────────────────────────────────────
+  echo "$RESPONSE" | jq -r \
+    --arg bold "$BOLD" --arg dim "$DIM" --arg reset "$RESET" \
+    --arg cyan "$CYAN" --arg green "$GREEN" \
+    --argjson total_count "$COUNT" \
+    '
+    [.hits.hits[]._source] | reverse | to_entries | .[] |
+    .key as $i | .value as $p |
+    ($total_count - $i) as $num |
+    [
+      "\($dim)───\($reset)",
+      "\($cyan)[\($num)]\($reset)  \($bold)\($green)\($p.package_attr_name)\($reset)  \($dim)\($p.package_version // "?")\($reset)",
+      "     \($p.package_description // "-")",
+      if $num == 1
+        then "     \($dim)nix-env -iA nixpkgs.\($p.package_attr_name)\($reset)"
+        else empty
+      end
+    ] | .[]
+    ' | highlight_query
+fi
+
+echo
+echo "${DIM}channel: ${CHANNEL}  query: '${QUERY}'  showing ${COUNT} of ${TOTAL} results  ${ELAPSED_MS}ms${RESET}"
