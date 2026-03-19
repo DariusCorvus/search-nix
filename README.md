@@ -5,10 +5,26 @@ Search NixOS packages from the terminal. Queries the [search.nixos.org](https://
 ## Install
 
 ```sh
-# With Nix flakes
-nix profile install github:DariusCorvus/search-nix
+# Run directly without installing
+nix run github:DariusCorvus/search-nix -- fuser
 
-# Or build from source
+# Install to profile
+nix profile install github:DariusCorvus/search-nix
+```
+
+Or add as a flake input:
+
+```nix
+{
+  inputs.search-nix.url = "github:DariusCorvus/search-nix";
+
+  # then use search-nix.packages.${system}.default
+}
+```
+
+Or build from source:
+
+```sh
 git clone https://github.com/DariusCorvus/search-nix.git
 cd search-nix
 go build -o search-nix .
@@ -41,17 +57,21 @@ Results are displayed with the best match at the bottom of the terminal for easy
 
 ```
 ───
-[2]  busybox  1.37.0
+[2]  busybox  1.37.0 *
      Tiny versions of common UNIX utilities in a single small executable
      programs fuser  runsv  swapon  openvt  reset  (+397 more)
 ───
-[1]  psmisc  23.7
+[1]  psmisc  23.7 *
      Set of small useful utilities that use the proc filesystem (such as fuser, killall and pstree)
      programs fuser  peekfd  pstree.x11  killall  pstree  (+2 more)
+     home     https://gitlab.com/psmisc/psmisc
+     nix profile install nixpkgs#psmisc
      nix-env -iA nixpkgs.psmisc
 
-channel: 25.11  query: 'fuser'  showing 5 of 142 results  38ms
+channel: unstable | query: 'fuser' | showing 5 of 5 | 38ms
 ```
+
+A `*` after the version indicates an exact program name match. The top result `[1]` shows the homepage and both install commands.
 
 ### TUI mode
 
