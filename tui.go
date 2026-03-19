@@ -136,11 +136,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.total = msg.total
 		m.elapsed = msg.elapsed
 		m.cursor = 0
-		m.expanded = -1
 		m.scroll = 0
 		if len(m.results) > 0 {
 			m.state = stateResults
+			m.expanded = 0
 			m.textInput.Blur()
+		} else {
+			m.expanded = -1
 		}
 		return m, nil
 
@@ -197,19 +199,19 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "up", "k":
 		if m.state == stateResults && len(m.results) > 0 {
-			m.expanded = -1
 			if m.cursor > 0 {
 				m.cursor--
 			}
+			m.expanded = m.cursor
 			m.ensureVisible()
 		}
 		return m, nil
 	case "down", "j":
 		if m.state == stateResults && len(m.results) > 0 {
-			m.expanded = -1
 			if m.cursor < len(m.results)-1 {
 				m.cursor++
 			}
+			m.expanded = m.cursor
 			m.ensureVisible()
 		}
 		return m, nil
