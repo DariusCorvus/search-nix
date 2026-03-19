@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -16,7 +18,12 @@ type tuiState int
 const (
 	stateInput   tuiState = iota
 	stateResults
+	stateHelp
 )
+
+type clearFlashMsg struct{}
+
+type shellDoneMsg struct{ err error }
 
 type searchDoneMsg struct {
 	results []ESHit
@@ -31,9 +38,11 @@ type pageLoadedMsg struct {
 }
 
 type model struct {
-	channel   string
-	size      int
+	channel    string
+	altChannel string
+	size       int
 	state     tuiState
+	prevState tuiState
 	textInput textinput.Model
 	results   []ESHit
 	total     int
@@ -44,6 +53,7 @@ type model struct {
 	searching   bool
 	loadingMore bool
 	err         error
+	flashMsg    string
 	width     int
 	height    int
 }
@@ -81,7 +91,7 @@ var (
 			Foreground(lipgloss.Color("8"))
 )
 
-func initialModel(channel string, size int, initialQuery string) model {
+func initialModel(channel, altChannel string, size int, initialQuery string) model {
 	ti := textinput.New()
 	ti.Placeholder = "search nixos packages..."
 	ti.Focus()
@@ -90,11 +100,12 @@ func initialModel(channel string, size int, initialQuery string) model {
 	ti.SetValue(initialQuery)
 
 	return model{
-		channel:   channel,
-		size:      size,
-		state:     stateInput,
-		expanded:  -1,
-		textInput: ti,
+		channel:    channel,
+		altChannel: altChannel,
+		size:       size,
+		state:      stateInput,
+		expanded:   -1,
+		textInput:  ti,
 	}
 }
 
@@ -174,6 +185,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case clearFlashMsg:
+		m.flashMsg = ""
+		return m, nil
+
+	case shellDoneMsg:
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.updateMain(msg)
 	}
@@ -187,7 +205,21 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
+	case "?":
+		if m.state == stateHelp {
+			m.state = m.prevState
+			return m, nil
+		}
+		if m.state == stateResults {
+			m.prevState = m.state
+			m.state = stateHelp
+			return m, nil
+		}
 	case "esc":
+		if m.state == stateHelp {
+			m.state = m.prevState
+			return m, nil
+		}
 		if m.expanded >= 0 {
 			m.expanded = -1
 			return m, nil
@@ -248,6 +280,54 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case "y":
+		if m.state == stateResults && len(m.results) > 0 {
+			name := m.results[m.cursor].Source.PackageAttrName
+			clipboard.WriteAll(name)
+			return m, m.flash("Copied: " + name)
+		}
+	case "Y":
+		if m.state == stateResults && len(m.results) > 0 {
+			cmd := "nix-env -iA nixpkgs." + m.results[m.cursor].Source.PackageAttrName
+			clipboard.WriteAll(cmd)
+			return m, m.flash("Copied: " + cmd)
+		}
+	case "p":
+		if m.state == stateResults && len(m.results) > 0 {
+			cmd := "nix profile install nixpkgs#" + m.results[m.cursor].Source.PackageAttrName
+			clipboard.WriteAll(cmd)
+			return m, m.flash("Copied: " + cmd)
+		}
+	case "r":
+		if m.state == stateResults && len(m.results) > 0 {
+			name := m.results[m.cursor].Source.PackageAttrName
+			c := exec.Command("nix-shell", "-p", name)
+			return m, tea.ExecProcess(c, func(err error) tea.Msg {
+				return shellDoneMsg{err}
+			})
+		}
+	case "o":
+		if m.state == stateResults && len(m.results) > 0 {
+			hp := homepage(m.results[m.cursor].Source)
+			if hp != "" {
+				exec.Command("xdg-open", hp).Start()
+				return m, m.flash("Opened: " + hp)
+			}
+		}
+	case "c":
+		if m.state == stateResults && m.altChannel != "" && !m.searching {
+			m.channel, m.altChannel = m.altChannel, m.channel
+			m.results = nil
+			m.total = 0
+			m.cursor = 0
+			m.scroll = 0
+			m.expanded = -1
+			if m.textInput.Value() != "" {
+				m.searching = true
+				return m, tea.Batch(m.doSearch(), m.flash("Channel: "+m.channel))
+			}
+			return m, m.flash("Channel: " + m.channel)
+		}
 	case "/", "tab":
 		m.textInput.Focus()
 		m.state = stateInput
@@ -261,6 +341,13 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+func (m *model) flash(msg string) tea.Cmd {
+	m.flashMsg = msg
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return clearFlashMsg{}
+	})
 }
 
 func (m *model) ensureVisible() {
@@ -298,8 +385,8 @@ func (m model) linesFromTo(from, to int) int {
 }
 
 func (m model) resultsHeight() int {
-	// total height minus: status bar (1) + input (1) + separator (1) + footer (1) + padding (1)
-	h := m.height - 5
+	// total height minus: status bar (1) + input (1) + separator (1) + info line (1) + bottom bar (1) + padding (1)
+	h := m.height - 6
 	if h < 3 {
 		h = 3
 	}
@@ -315,25 +402,30 @@ func (m model) View() string {
 
 	// Status bar
 	left := fmt.Sprintf(" Channel: %s", m.channel)
-	right := "q: quit  /: search  enter: expand"
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
+	if m.altChannel != "" {
+		left += "  " + dimStyle.Render(m.altChannel+" [c]")
 	}
-	statusLine := left + strings.Repeat(" ", gap) + right
-	b.WriteString(statusStyle.Width(m.width).Render(statusLine))
+	b.WriteString(statusStyle.Width(m.width).Render(left))
 	b.WriteString("\n")
 
-	// Input
-	b.WriteString(" > ")
-	b.WriteString(m.textInput.View())
-	b.WriteString("\n")
+	if m.state == stateHelp {
+		b.WriteString(m.viewHelp())
+	} else {
+		// Input
+		b.WriteString(" > ")
+		b.WriteString(m.textInput.View())
+		b.WriteString("\n")
 
-	// Separator
-	b.WriteString(dimStyle.Render(strings.Repeat("─", m.width)))
-	b.WriteString("\n")
+		// Separator
+		b.WriteString(dimStyle.Render(strings.Repeat("─", m.width)))
+		b.WriteString("\n")
 
-	b.WriteString(m.viewResults())
+		b.WriteString(m.viewResults())
+	}
+
+	// Bottom bar
+	hints := "?:help  c:ch  y:copy  r:shell  o:open  q:quit"
+	b.WriteString(statusStyle.Width(m.width).Render(" " + hints))
 
 	return b.String()
 }
@@ -431,13 +523,61 @@ func (m model) viewResults() string {
 	}
 
 	// Footer
-	if len(m.results) > 0 {
+	if m.flashMsg != "" {
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true).Render(m.flashMsg))
+	} else if len(m.results) > 0 {
 		footer := fmt.Sprintf("Showing %d of %d results (%dms)",
 			len(m.results), m.total, m.elapsed.Milliseconds())
 		if m.loadingMore {
 			footer += "  loading more..."
 		}
 		b.WriteString(footerStyle.Render(footer))
+	}
+
+	return b.String()
+}
+
+func (m model) viewHelp() string {
+	var b strings.Builder
+
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+	key := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
+
+	b.WriteString("\n")
+	b.WriteString(title.Render("  Keybindings"))
+	b.WriteString("\n\n")
+
+	bindings := []struct{ k, desc string }{
+		{"Enter", "Search (in input) / Toggle detail (in results)"},
+		{"j / Down", "Move cursor down"},
+		{"k / Up", "Move cursor up"},
+		{"/ / Tab", "Focus search input"},
+		{"c", "Switch channel"},
+		{"y", "Copy package name"},
+		{"Y", "Copy nix-env install command"},
+		{"p", "Copy nix profile install command"},
+		{"r", "Open nix-shell with package"},
+		{"o", "Open homepage in browser"},
+		{"Esc", "Collapse detail / Clear input / Quit"},
+		{"q", "Quit"},
+		{"?", "Toggle this help"},
+		{"Ctrl+C", "Quit immediately"},
+	}
+
+	for _, bind := range bindings {
+		k := key.Render(fmt.Sprintf("  %-12s", bind.k))
+		b.WriteString(fmt.Sprintf("%s %s\n", k, bind.desc))
+	}
+
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("  Press ? or Esc to close"))
+	b.WriteString("\n")
+
+	// Pad remaining height: status(1) + bottom bar(1) already accounted for outside
+	used := strings.Count(b.String(), "\n")
+	total := m.height - 2
+	for i := used; i < total; i++ {
+		b.WriteString("\n")
 	}
 
 	return b.String()
@@ -522,8 +662,8 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-func runTUI(channel string, size int, initialQuery string) int {
-	m := initialModel(channel, size, initialQuery)
+func runTUI(channel, altChannel string, size int, initialQuery string) int {
+	m := initialModel(channel, altChannel, size, initialQuery)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

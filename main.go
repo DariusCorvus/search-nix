@@ -52,7 +52,8 @@ func main() {
 	}
 
 	if tui {
-		os.Exit(runTUI(channel, size, query))
+		altChannel := detectAltChannel(channel)
+		os.Exit(runTUI(channel, altChannel, size, query))
 	}
 
 	if query == "" {
