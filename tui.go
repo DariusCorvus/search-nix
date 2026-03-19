@@ -286,7 +286,7 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			clipboard.WriteAll(name)
 			return m, m.flash("Copied: " + name)
 		}
-	case "Y":
+	case "e":
 		if m.state == stateResults && len(m.results) > 0 {
 			cmd := "nix-env -iA nixpkgs." + m.results[m.cursor].Source.PackageAttrName
 			clipboard.WriteAll(cmd)
@@ -554,7 +554,7 @@ func (m model) viewHelp() string {
 		{"/ / Tab", "Focus search input"},
 		{"c", "Switch channel"},
 		{"y", "Copy package name"},
-		{"Y", "Copy nix-env install command"},
+		{"e", "Copy nix-env install command"},
 		{"p", "Copy nix profile install command"},
 		{"r", "Open nix-shell with package"},
 		{"o", "Open homepage in browser"},
