@@ -17,7 +17,7 @@
           version = "0.1.0";
           src = ./.;
           # Run `nix build` once to get the correct hash from the error message
-          vendorHash = "sha256-GlwDnvLCTNLID0SW1wHh4f5O1t0sz+NX/k4RdC1jKk0=";
+          vendorHash = "sha256-SyGX4R4X7uFiZlmpa7wD1MDFF3tNw/cjg2XWUiCqX7E=";
         };
 
         devShells.default = pkgs.mkShell {

@@ -1,0 +1,423 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+type tuiState int
+
+const (
+	stateInput   tuiState = iota
+	stateResults
+	stateDetail
+)
+
+type searchDoneMsg struct {
+	results []ESHit
+	total   int
+	elapsed time.Duration
+	err     error
+}
+
+type model struct {
+	channel   string
+	size      int
+	state     tuiState
+	textInput textinput.Model
+	results   []ESHit
+	total     int
+	elapsed   time.Duration
+	cursor    int
+	scroll    int
+	searching bool
+	err       error
+	width     int
+	height    int
+}
+
+// Styles
+var (
+	statusStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("236")).
+			Foreground(lipgloss.Color("252")).
+			Padding(0, 1)
+
+	selectedStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("236"))
+
+	pkgNameStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("2")).
+			Bold(true)
+
+	versionStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8"))
+
+	numStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("6"))
+
+	programsLabelStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("5"))
+
+	labelStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("3"))
+
+	dimStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8"))
+
+	footerStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8"))
+)
+
+func initialModel(channel string, size int, initialQuery string) model {
+	ti := textinput.New()
+	ti.Placeholder = "search nixos packages..."
+	ti.Focus()
+	ti.CharLimit = 256
+	ti.Width = 60
+	ti.SetValue(initialQuery)
+
+	return model{
+		channel:   channel,
+		size:      size,
+		state:     stateInput,
+		textInput: ti,
+	}
+}
+
+func (m model) Init() tea.Cmd {
+	cmds := []tea.Cmd{textinput.Blink}
+	if m.textInput.Value() != "" {
+		cmds = append(cmds, m.doSearch())
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m model) doSearch() tea.Cmd {
+	query := m.textInput.Value()
+	channel := m.channel
+	size := m.size
+	return func() tea.Msg {
+		resp, elapsed, err := search(query, channel, size)
+		if err != nil {
+			return searchDoneMsg{err: err}
+		}
+		return searchDoneMsg{
+			results: resp.Hits.Hits,
+			total:   resp.Hits.Total.Value,
+			elapsed: elapsed,
+		}
+	}
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.textInput.Width = min(msg.Width-4, 80)
+		return m, nil
+
+	case searchDoneMsg:
+		m.searching = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.err = nil
+		m.results = msg.results
+		m.total = msg.total
+		m.elapsed = msg.elapsed
+		m.cursor = 0
+		m.scroll = 0
+		if len(m.results) > 0 {
+			m.state = stateResults
+			m.textInput.Blur()
+		}
+		return m, nil
+
+	case tea.KeyMsg:
+		switch m.state {
+		case stateDetail:
+			return m.updateDetail(msg)
+		default:
+			return m.updateMain(msg)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.textInput, cmd = m.textInput.Update(msg)
+	return m, cmd
+}
+
+func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		if m.textInput.Value() == "" {
+			return m, tea.Quit
+		}
+		// Clear input and go back to input state
+		m.textInput.SetValue("")
+		m.textInput.Focus()
+		m.results = nil
+		m.total = 0
+		m.state = stateInput
+		m.err = nil
+		return m, nil
+	case "q":
+		if m.state == stateResults {
+			return m, tea.Quit
+		}
+	case "enter":
+		if m.state == stateResults && len(m.results) > 0 {
+			m.state = stateDetail
+			return m, nil
+		}
+		if m.textInput.Value() != "" {
+			m.searching = true
+			m.err = nil
+			return m, m.doSearch()
+		}
+		return m, nil
+	case "up", "k":
+		if m.state == stateResults && len(m.results) > 0 {
+			if m.cursor > 0 {
+				m.cursor--
+			}
+			m.ensureVisible()
+		}
+		return m, nil
+	case "down", "j":
+		if m.state == stateResults && len(m.results) > 0 {
+			if m.cursor < len(m.results)-1 {
+				m.cursor++
+			}
+			m.ensureVisible()
+		}
+		return m, nil
+	case "/", "tab":
+		m.textInput.Focus()
+		m.state = stateInput
+		return m, textinput.Blink
+	}
+
+	// Only pass keys to text input when in input state
+	if m.state == stateInput {
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "backspace", "q":
+		m.state = stateResults
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *model) ensureVisible() {
+	visibleLines := m.resultsHeight()
+	// Each result takes 2 lines (name+version, description)
+	linesPerResult := 2
+	visible := visibleLines / linesPerResult
+	if visible < 1 {
+		visible = 1
+	}
+	if m.cursor < m.scroll {
+		m.scroll = m.cursor
+	}
+	if m.cursor >= m.scroll+visible {
+		m.scroll = m.cursor - visible + 1
+	}
+}
+
+func (m model) resultsHeight() int {
+	// total height minus: status bar (1) + input (1) + separator (1) + footer (1) + padding (1)
+	h := m.height - 5
+	if h < 3 {
+		h = 3
+	}
+	return h
+}
+
+func (m model) View() string {
+	if m.width == 0 {
+		return "Loading..."
+	}
+
+	var b strings.Builder
+
+	// Status bar
+	left := fmt.Sprintf(" Channel: %s", m.channel)
+	right := "q: quit  /: search  enter: select"
+	if m.state == stateDetail {
+		right = "esc: back  q: quit"
+	}
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	statusLine := left + strings.Repeat(" ", gap) + right
+	b.WriteString(statusStyle.Width(m.width).Render(statusLine))
+	b.WriteString("\n")
+
+	// Input
+	b.WriteString(" > ")
+	b.WriteString(m.textInput.View())
+	b.WriteString("\n")
+
+	// Separator
+	b.WriteString(dimStyle.Render(strings.Repeat("─", m.width)))
+	b.WriteString("\n")
+
+	switch m.state {
+	case stateDetail:
+		b.WriteString(m.viewDetail())
+	default:
+		b.WriteString(m.viewResults())
+	}
+
+	return b.String()
+}
+
+func (m model) viewResults() string {
+	var b strings.Builder
+	rh := m.resultsHeight()
+
+	if m.searching {
+		b.WriteString(dimStyle.Render("  Searching..."))
+		b.WriteString("\n")
+	} else if m.err != nil {
+		b.WriteString(fmt.Sprintf("  Error: %v\n", m.err))
+	} else if len(m.results) == 0 {
+		if m.textInput.Value() != "" {
+			b.WriteString(dimStyle.Render("  No results. Press Enter to search."))
+			b.WriteString("\n")
+		} else {
+			b.WriteString(dimStyle.Render("  Type a query and press Enter to search."))
+			b.WriteString("\n")
+		}
+	} else {
+		linesUsed := 0
+		for i := m.scroll; i < len(m.results); i++ {
+			if linesUsed+2 > rh {
+				break
+			}
+			p := m.results[i].Source
+			num := i + 1
+			selected := i == m.cursor
+
+			numStr := numStyle.Render(fmt.Sprintf("[%d]", num))
+			nameStr := pkgNameStyle.Render(p.PackageAttrName)
+			verStr := versionStyle.Render(nvl(p.PackageVersion, "?"))
+			descStr := nvl(p.PackageDescription, "-")
+
+			line1 := fmt.Sprintf(" %s %s  %s", numStr, nameStr, verStr)
+			line2 := fmt.Sprintf("      %s", truncate(descStr, m.width-7))
+
+			if selected {
+				line1 = selectedStyle.Width(m.width).Render(line1)
+				line2 = selectedStyle.Width(m.width).Render(line2)
+			}
+
+			b.WriteString(line1)
+			b.WriteString("\n")
+			b.WriteString(line2)
+			b.WriteString("\n")
+			linesUsed += 2
+		}
+	}
+
+	// Pad remaining space
+	lines := strings.Count(b.String(), "\n")
+	for i := lines; i < rh; i++ {
+		b.WriteString("\n")
+	}
+
+	// Footer
+	if len(m.results) > 0 {
+		footer := fmt.Sprintf("Showing %d of %d results (%dms)",
+			len(m.results), m.total, m.elapsed.Milliseconds())
+		b.WriteString(footerStyle.Render(footer))
+	}
+
+	return b.String()
+}
+
+func (m model) viewDetail() string {
+	if m.cursor < 0 || m.cursor >= len(m.results) {
+		return ""
+	}
+
+	var b strings.Builder
+	p := m.results[m.cursor].Source
+
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf(" %s  %s\n",
+		pkgNameStyle.Render(p.PackageAttrName),
+		versionStyle.Render(nvl(p.PackageVersion, "?")),
+	))
+	b.WriteString("\n")
+
+	b.WriteString(fmt.Sprintf(" %s\n", nvl(p.PackageDescription, "-")))
+	b.WriteString("\n")
+
+	if len(p.PackagePrograms) > 0 {
+		b.WriteString(fmt.Sprintf(" %s  %s\n",
+			programsLabelStyle.Render("programs"),
+			strings.Join(p.PackagePrograms, "  "),
+		))
+		b.WriteString("\n")
+	}
+
+	if hp := homepage(p); hp != "" {
+		b.WriteString(fmt.Sprintf(" %s      %s\n", labelStyle.Render("home"), hp))
+	}
+
+	if lic := licenses(p); lic != "" {
+		b.WriteString(fmt.Sprintf(" %s   %s\n", labelStyle.Render("license"), lic))
+	}
+
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf(" %s\n",
+		dimStyle.Render("nix-env -iA nixpkgs."+p.PackageAttrName)))
+
+	return b.String()
+}
+
+func truncate(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return s
+	}
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
+}
+
+func runTUI(channel string, size int, initialQuery string) int {
+	m := initialModel(channel, size, initialQuery)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	return 0
+}

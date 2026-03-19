@@ -11,6 +11,7 @@ func main() {
 	channel := ""
 	size := 20
 	verbose := false
+	tui := false
 	var positional []string
 
 	args := os.Args[1:]
@@ -34,6 +35,8 @@ func main() {
 			size = n
 		case "-v", "--verbose":
 			verbose = true
+		case "-t", "--tui":
+			tui = true
 		case "-h", "--help":
 			printUsage()
 			os.Exit(0)
@@ -43,14 +46,19 @@ func main() {
 	}
 
 	query := strings.Join(positional, " ")
+
+	if channel == "" {
+		channel = detectChannel()
+	}
+
+	if tui {
+		os.Exit(runTUI(channel, size, query))
+	}
+
 	if query == "" {
 		fmt.Fprintln(os.Stderr, "error: no search query provided")
 		fmt.Fprintln(os.Stderr, "Usage: search-nix <query>")
 		os.Exit(1)
-	}
-
-	if channel == "" {
-		channel = detectChannel()
 	}
 
 	resp, elapsed, err := search(query, channel, size)
@@ -81,13 +89,14 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Print(`Usage: search-nix [OPTIONS] <query>
+	fmt.Print(`Usage: search-nix [OPTIONS] [query]
 
 Options:
   -c, --channel <channel>   Channel to search (unstable, 25.11, 24.11, ...)
                             Default: auto-detected from nixos-version
   -n, --size <n>            Number of results (default: 20, max: 50)
   -v, --verbose             Show full output (homepage, license, programs)
+  -t, --tui                 Launch interactive TUI mode
   -h, --help                Show this help
 
 Examples:
@@ -95,6 +104,8 @@ Examples:
   search-nix -v fuser
   search-nix -n 5 python linter
   search-nix -c unstable ffmpeg
+  search-nix -t                    # interactive TUI
+  search-nix -t fuser              # TUI with pre-filled query
 `)
 }
 
