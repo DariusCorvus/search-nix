@@ -72,6 +72,13 @@ func renderResults(hits []ESHit, opts RenderOpts) {
 		)
 		fmt.Printf("     %s\n", highlight(nvl(p.PackageDescription, "-"), opts.Query))
 
+		if len(p.PackagePrograms) > 0 {
+			fmt.Printf("     %s %s\n",
+				c(magenta, "programs"),
+				peekPrograms(p.PackagePrograms, 5, opts.Query),
+			)
+		}
+
 		if num == 1 {
 			fmt.Printf("     %s\n", c(dim, "nix-env -iA nixpkgs."+p.PackageAttrName))
 		}
@@ -162,4 +169,32 @@ func licenses(p SearchResult) string {
 		}
 	}
 	return strings.Join(parts, ", ")
+}
+
+func peekPrograms(progs []string, max int, query string) string {
+	// Partition: matching programs first, then the rest
+	var matched, rest []string
+	terms := strings.Fields(strings.ToLower(query))
+	for _, p := range progs {
+		if matchesAnyTerm(p, terms) {
+			matched = append(matched, highlight(p, query))
+		} else {
+			rest = append(rest, p)
+		}
+	}
+	ordered := append(matched, rest...)
+	if len(ordered) <= max {
+		return strings.Join(ordered, "  ")
+	}
+	return strings.Join(ordered[:max], "  ") + fmt.Sprintf("  (+%d more)", len(ordered)-max)
+}
+
+func matchesAnyTerm(prog string, terms []string) bool {
+	lower := strings.ToLower(prog)
+	for _, t := range terms {
+		if strings.Contains(lower, t) {
+			return true
+		}
+	}
+	return false
 }
