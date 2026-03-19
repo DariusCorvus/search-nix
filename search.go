@@ -67,9 +67,13 @@ func (l *License) UnmarshalJSON(data []byte) error {
 }
 
 func search(query string, channel string, size int) (*ESResponse, time.Duration, error) {
+	return searchFrom(query, channel, size, 0)
+}
+
+func searchFrom(query string, channel string, size int, from int) (*ESResponse, time.Duration, error) {
 	url := fmt.Sprintf("https://search.nixos.org/backend/latest-%s-nixos-%s/_search", esSchema, channel)
 
-	payload := buildQuery(query, size)
+	payload := buildQuery(query, size, from)
 
 	start := time.Now()
 
@@ -112,9 +116,9 @@ func search(query string, channel string, size int) (*ESResponse, time.Duration,
 	return &esResp, elapsed, nil
 }
 
-func buildQuery(query string, size int) string {
+func buildQuery(query string, size int, from int) string {
 	q := map[string]interface{}{
-		"from": 0,
+		"from": from,
 		"size": size,
 		"query": map[string]interface{}{
 			"bool": map[string]interface{}{

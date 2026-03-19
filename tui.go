@@ -25,6 +25,11 @@ type searchDoneMsg struct {
 	err     error
 }
 
+type pageLoadedMsg struct {
+	results []ESHit
+	err     error
+}
+
 type model struct {
 	channel   string
 	size      int
@@ -36,8 +41,9 @@ type model struct {
 	cursor   int
 	expanded int // index of expanded result, -1 if none
 	scroll   int
-	searching bool
-	err       error
+	searching   bool
+	loadingMore bool
+	err         error
 	width     int
 	height    int
 }
@@ -117,6 +123,20 @@ func (m model) doSearch() tea.Cmd {
 	}
 }
 
+func (m model) loadNextPage() tea.Cmd {
+	query := m.textInput.Value()
+	channel := m.channel
+	size := m.size
+	from := len(m.results)
+	return func() tea.Msg {
+		resp, _, err := searchFrom(query, channel, size, from)
+		if err != nil {
+			return pageLoadedMsg{err: err}
+		}
+		return pageLoadedMsg{results: resp.Hits.Hits}
+	}
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -127,6 +147,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case searchDoneMsg:
 		m.searching = false
+		m.loadingMore = false
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -143,6 +164,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textInput.Blur()
 		} else {
 			m.expanded = -1
+		}
+		return m, nil
+
+	case pageLoadedMsg:
+		m.loadingMore = false
+		if msg.err == nil && len(msg.results) > 0 {
+			m.results = append(m.results, msg.results...)
 		}
 		return m, nil
 
@@ -213,6 +241,11 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.expanded = m.cursor
 			m.ensureVisible()
+			// Load next page when near the end
+			if m.cursor >= len(m.results)-3 && len(m.results) < m.total && !m.loadingMore {
+				m.loadingMore = true
+				return m, m.loadNextPage()
+			}
 		}
 		return m, nil
 	case "/", "tab":
@@ -401,6 +434,9 @@ func (m model) viewResults() string {
 	if len(m.results) > 0 {
 		footer := fmt.Sprintf("Showing %d of %d results (%dms)",
 			len(m.results), m.total, m.elapsed.Milliseconds())
+		if m.loadingMore {
+			footer += "  loading more..."
+		}
 		b.WriteString(footerStyle.Render(footer))
 	}
 
