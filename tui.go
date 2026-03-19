@@ -385,8 +385,8 @@ func (m model) linesFromTo(from, to int) int {
 }
 
 func (m model) resultsHeight() int {
-	// total height minus: status bar (1) + input (1) + separator (1) + info line (1) + bottom bar (1) + padding (1)
-	h := m.height - 6
+	// total height minus: status bar (1) + input (1) + separator (1) + bottom bar (1)
+	h := m.height - 4
 	if h < 3 {
 		h = 3
 	}
@@ -424,8 +424,22 @@ func (m model) View() string {
 	}
 
 	// Bottom bar
-	hints := "?:help  c:ch  y:copy  r:shell  o:open  q:quit"
-	b.WriteString(statusStyle.Width(m.width).Render(" " + hints))
+	botLeft := ""
+	if m.flashMsg != "" {
+		botLeft = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true).Render(m.flashMsg)
+	} else if len(m.results) > 0 {
+		botLeft = fmt.Sprintf(" Showing %d of %d results (%dms)", len(m.results), m.total, m.elapsed.Milliseconds())
+		if m.loadingMore {
+			botLeft += "  loading more..."
+		}
+	}
+	botRight := "?:help  c:ch  y:copy  r:shell  o:open  q:quit "
+	botGap := m.width - lipgloss.Width(botLeft) - lipgloss.Width(botRight)
+	if botGap < 1 {
+		botGap = 1
+	}
+	bottomLine := botLeft + strings.Repeat(" ", botGap) + botRight
+	b.WriteString(statusStyle.Padding(0, 0).Width(m.width).Render(bottomLine))
 
 	return b.String()
 }
@@ -520,18 +534,6 @@ func (m model) viewResults() string {
 	lines := strings.Count(b.String(), "\n")
 	for i := lines; i < rh; i++ {
 		b.WriteString("\n")
-	}
-
-	// Footer
-	if m.flashMsg != "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true).Render(m.flashMsg))
-	} else if len(m.results) > 0 {
-		footer := fmt.Sprintf("Showing %d of %d results (%dms)",
-			len(m.results), m.total, m.elapsed.Milliseconds())
-		if m.loadingMore {
-			footer += "  loading more..."
-		}
-		b.WriteString(footerStyle.Render(footer))
 	}
 
 	return b.String()
