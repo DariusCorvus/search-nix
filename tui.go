@@ -16,7 +16,6 @@ type tuiState int
 const (
 	stateInput   tuiState = iota
 	stateResults
-	stateDetail
 )
 
 type searchDoneMsg struct {
@@ -34,8 +33,9 @@ type model struct {
 	results   []ESHit
 	total     int
 	elapsed   time.Duration
-	cursor    int
-	scroll    int
+	cursor   int
+	expanded int // index of expanded result, -1 if none
+	scroll   int
 	searching bool
 	err       error
 	width     int
@@ -87,6 +87,7 @@ func initialModel(channel string, size int, initialQuery string) model {
 		channel:   channel,
 		size:      size,
 		state:     stateInput,
+		expanded:  -1,
 		textInput: ti,
 	}
 }
@@ -135,6 +136,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.total = msg.total
 		m.elapsed = msg.elapsed
 		m.cursor = 0
+		m.expanded = -1
 		m.scroll = 0
 		if len(m.results) > 0 {
 			m.state = stateResults
@@ -143,12 +145,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		switch m.state {
-		case stateDetail:
-			return m.updateDetail(msg)
-		default:
-			return m.updateMain(msg)
-		}
+		return m.updateMain(msg)
 	}
 
 	var cmd tea.Cmd
@@ -161,6 +158,10 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "esc":
+		if m.expanded >= 0 {
+			m.expanded = -1
+			return m, nil
+		}
 		if m.textInput.Value() == "" {
 			return m, tea.Quit
 		}
@@ -169,6 +170,7 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.textInput.Focus()
 		m.results = nil
 		m.total = 0
+		m.expanded = -1
 		m.state = stateInput
 		m.err = nil
 		return m, nil
@@ -178,7 +180,13 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if m.state == stateResults && len(m.results) > 0 {
-			m.state = stateDetail
+			// Toggle expanded detail inline
+			if m.expanded == m.cursor {
+				m.expanded = -1
+			} else {
+				m.expanded = m.cursor
+			}
+			m.ensureVisible()
 			return m, nil
 		}
 		if m.textInput.Value() != "" {
@@ -189,6 +197,7 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "up", "k":
 		if m.state == stateResults && len(m.results) > 0 {
+			m.expanded = -1
 			if m.cursor > 0 {
 				m.cursor--
 			}
@@ -197,6 +206,7 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "down", "j":
 		if m.state == stateResults && len(m.results) > 0 {
+			m.expanded = -1
 			if m.cursor < len(m.results)-1 {
 				m.cursor++
 			}
@@ -218,31 +228,35 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
-		return m, tea.Quit
-	case "esc", "backspace", "q":
-		m.state = stateResults
-		return m, nil
-	}
-	return m, nil
-}
-
 func (m *model) ensureVisible() {
-	visibleLines := m.resultsHeight()
-	// Each result takes 2 lines (name+version, description)
-	linesPerResult := 2
-	visible := visibleLines / linesPerResult
-	if visible < 1 {
-		visible = 1
-	}
+	rh := m.resultsHeight()
 	if m.cursor < m.scroll {
 		m.scroll = m.cursor
 	}
-	if m.cursor >= m.scroll+visible {
-		m.scroll = m.cursor - visible + 1
+	// Scroll down until cursor item (plus its detail if expanded) fits
+	for {
+		used := m.linesFromTo(m.scroll, m.cursor)
+		if used <= rh {
+			break
+		}
+		m.scroll++
+		if m.scroll > m.cursor {
+			m.scroll = m.cursor
+			break
+		}
 	}
+}
+
+// linesFromTo returns total lines used to render results from index `from` through `to` (inclusive).
+func (m model) linesFromTo(from, to int) int {
+	lines := 0
+	for i := from; i <= to && i < len(m.results); i++ {
+		lines += 2 // summary: name+version, description
+		if i == m.expanded {
+			lines += m.detailLineCount(i)
+		}
+	}
+	return lines
 }
 
 func (m model) resultsHeight() int {
@@ -263,10 +277,7 @@ func (m model) View() string {
 
 	// Status bar
 	left := fmt.Sprintf(" Channel: %s", m.channel)
-	right := "q: quit  /: search  enter: select"
-	if m.state == stateDetail {
-		right = "esc: back  q: quit"
-	}
+	right := "q: quit  /: search  enter: expand"
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
@@ -284,12 +295,7 @@ func (m model) View() string {
 	b.WriteString(dimStyle.Render(strings.Repeat("─", m.width)))
 	b.WriteString("\n")
 
-	switch m.state {
-	case stateDetail:
-		b.WriteString(m.viewDetail())
-	default:
-		b.WriteString(m.viewResults())
-	}
+	b.WriteString(m.viewResults())
 
 	return b.String()
 }
@@ -314,19 +320,31 @@ func (m model) viewResults() string {
 	} else {
 		linesUsed := 0
 		for i := m.scroll; i < len(m.results); i++ {
-			if linesUsed+2 > rh {
+			needed := 2
+			isExpanded := i == m.expanded
+			if isExpanded {
+				needed += m.detailLineCount(i)
+			}
+			if linesUsed+needed > rh {
 				break
 			}
 			p := m.results[i].Source
 			num := i + 1
 			selected := i == m.cursor
 
+			marker := " "
+			if isExpanded {
+				marker = dimStyle.Render("▼")
+			} else if selected {
+				marker = dimStyle.Render("▶")
+			}
+
 			numStr := numStyle.Render(fmt.Sprintf("[%d]", num))
 			nameStr := pkgNameStyle.Render(p.PackageAttrName)
 			verStr := versionStyle.Render(nvl(p.PackageVersion, "?"))
 			descStr := nvl(p.PackageDescription, "-")
 
-			line1 := fmt.Sprintf(" %s %s  %s", numStr, nameStr, verStr)
+			line1 := fmt.Sprintf("%s%s %s  %s", marker, numStr, nameStr, verStr)
 			line2 := fmt.Sprintf("      %s", truncate(descStr, m.width-7))
 
 			if selected {
@@ -339,6 +357,12 @@ func (m model) viewResults() string {
 			b.WriteString(line2)
 			b.WriteString("\n")
 			linesUsed += 2
+
+			if isExpanded {
+				detail := m.renderInlineDetail(i)
+				b.WriteString(detail)
+				linesUsed += m.detailLineCount(i)
+			}
 		}
 	}
 
@@ -358,45 +382,48 @@ func (m model) viewResults() string {
 	return b.String()
 }
 
-func (m model) viewDetail() string {
-	if m.cursor < 0 || m.cursor >= len(m.results) {
+func (m model) renderInlineDetail(idx int) string {
+	if idx < 0 || idx >= len(m.results) {
 		return ""
 	}
-
+	p := m.results[idx].Source
 	var b strings.Builder
-	p := m.results[m.cursor].Source
-
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf(" %s  %s\n",
-		pkgNameStyle.Render(p.PackageAttrName),
-		versionStyle.Render(nvl(p.PackageVersion, "?")),
-	))
-	b.WriteString("\n")
-
-	b.WriteString(fmt.Sprintf(" %s\n", nvl(p.PackageDescription, "-")))
-	b.WriteString("\n")
+	indent := "       "
 
 	if len(p.PackagePrograms) > 0 {
-		b.WriteString(fmt.Sprintf(" %s  %s\n",
+		b.WriteString(fmt.Sprintf("%s%s  %s\n",
+			indent,
 			programsLabelStyle.Render("programs"),
 			strings.Join(p.PackagePrograms, "  "),
 		))
-		b.WriteString("\n")
 	}
-
 	if hp := homepage(p); hp != "" {
-		b.WriteString(fmt.Sprintf(" %s      %s\n", labelStyle.Render("home"), hp))
+		b.WriteString(fmt.Sprintf("%s%s      %s\n", indent, labelStyle.Render("home"), hp))
 	}
-
 	if lic := licenses(p); lic != "" {
-		b.WriteString(fmt.Sprintf(" %s   %s\n", labelStyle.Render("license"), lic))
+		b.WriteString(fmt.Sprintf("%s%s   %s\n", indent, labelStyle.Render("license"), lic))
 	}
-
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf(" %s\n",
-		dimStyle.Render("nix-env -iA nixpkgs."+p.PackageAttrName)))
-
+	b.WriteString(fmt.Sprintf("%s%s\n",
+		indent, dimStyle.Render("nix-env -iA nixpkgs."+p.PackageAttrName)))
 	return b.String()
+}
+
+func (m model) detailLineCount(idx int) int {
+	if idx < 0 || idx >= len(m.results) {
+		return 0
+	}
+	p := m.results[idx].Source
+	lines := 1 // install command always shown
+	if len(p.PackagePrograms) > 0 {
+		lines++
+	}
+	if homepage(p) != "" {
+		lines++
+	}
+	if licenses(p) != "" {
+		lines++
+	}
+	return lines
 }
 
 func truncate(s string, maxLen int) string {

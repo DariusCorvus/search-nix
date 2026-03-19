@@ -58,4 +58,4 @@ No test suite. Test manually:
 - Results are displayed reversed (best match `[1]` at bottom of terminal)
 - Colors auto-disable when stdout is not a tty
 - `search-nix.sh` is the original bash implementation, kept for reference
-- TUI mode (`-t`/`--tui`): interactive bubbletea interface with text input, scrollable results list, and detail view (Enter on a result). Keys: `j/k`/arrows to navigate, `Enter` to search or view detail, `Esc`/`backspace` to go back, `/`/`Tab` to refocus input, `q` to quit
+- TUI mode (`-t`/`--tui`): interactive bubbletea interface with text input, scrollable results, and inline expandable detail (Enter toggles). Keys: `j/k`/arrows to navigate, `Enter` to search or toggle detail, `Esc` to collapse/clear/quit, `/`/`Tab` to refocus input, `q` to quit

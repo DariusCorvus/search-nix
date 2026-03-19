@@ -69,13 +69,13 @@ search-nix -t fuser        # start with pre-filled query and immediate search
 | Type + `Enter` | Search for the query |
 | `j` / `Down` | Move cursor down |
 | `k` / `Up` | Move cursor up |
-| `Enter` (on result) | Open detail view |
+| `Enter` (on result) | Toggle inline detail (programs, homepage, license, install command) |
 | `/` or `Tab` | Refocus search input |
-| `Esc` | Clear input / go back |
-| `q` | Quit (from results/detail) |
+| `Esc` | Collapse detail / clear input / quit |
+| `q` | Quit (from results) |
 | `Ctrl+C` | Quit (always) |
 
-The detail view shows the full package info: description, all programs, homepage, license, and install command.
+Pressing `Enter` on a result expands its details inline below it (like an HTML `<details>` element). Press `Enter` again or `Esc` to collapse. Navigating with `j`/`k` also collapses any open detail.
 
 ## Channel detection
 
