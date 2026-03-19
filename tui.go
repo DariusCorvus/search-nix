@@ -356,8 +356,18 @@ func (m model) viewResults() string {
 			line2 := fmt.Sprintf("      %s", truncate(descStr, m.width-7))
 
 			if selected {
-				line1 = selectedStyle.Width(m.width).Render(line1)
-				line2 = selectedStyle.Width(m.width).Render(line2)
+				// Use raw ANSI bg so it covers the full line including styled segments
+				bg := "\033[48;5;236m"
+				pad1 := m.width - lipgloss.Width(line1)
+				if pad1 < 0 {
+					pad1 = 0
+				}
+				pad2 := m.width - lipgloss.Width(line2)
+				if pad2 < 0 {
+					pad2 = 0
+				}
+				line1 = bg + line1 + strings.Repeat(" ", pad1) + reset
+				line2 = bg + line2 + strings.Repeat(" ", pad2) + reset
 			}
 
 			b.WriteString(line1)
