@@ -253,6 +253,9 @@ func (m *model) ensureVisible() {
 func (m model) linesFromTo(from, to int) int {
 	lines := 0
 	for i := from; i <= to && i < len(m.results); i++ {
+		if i > from {
+			lines++ // separator
+		}
 		lines += 2 // summary: name+version, description
 		if i == m.expanded {
 			lines += m.detailLineCount(i)
@@ -327,19 +330,24 @@ func (m model) viewResults() string {
 			if isExpanded {
 				needed += m.detailLineCount(i)
 			}
+			// Add 1 for separator between items (not before first visible)
+			if i > m.scroll {
+				needed++
+			}
 			if linesUsed+needed > rh {
 				break
 			}
+
+			// Separator between items
+			if i > m.scroll {
+				b.WriteString(dimStyle.Render(strings.Repeat("─", m.width)))
+				b.WriteString("\n")
+				linesUsed++
+			}
+
 			p := m.results[i].Source
 			num := i + 1
 			selected := i == m.cursor
-
-			marker := " "
-			if isExpanded {
-				marker = dimStyle.Render("▼")
-			} else if selected {
-				marker = dimStyle.Render("▶")
-			}
 
 			numStr := numStyle.Render(fmt.Sprintf("[%d]", num))
 			nameStr := pkgNameStyle.Render(p.PackageAttrName)
@@ -352,11 +360,10 @@ func (m model) viewResults() string {
 				matchTag = "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true).Render("*")
 			}
 
-			line1 := fmt.Sprintf("%s%s %s  %s%s", marker, numStr, nameStr, verStr, matchTag)
+			line1 := fmt.Sprintf(" %s %s  %s%s", numStr, nameStr, verStr, matchTag)
 			line2 := fmt.Sprintf("      %s", truncate(descStr, m.width-7))
 
 			if selected {
-				// Use raw ANSI bg so it covers the full line including styled segments
 				bg := "\033[48;5;236m"
 				pad1 := m.width - lipgloss.Width(line1)
 				if pad1 < 0 {
