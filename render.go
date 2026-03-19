@@ -65,10 +65,17 @@ func renderResults(hits []ESHit, opts RenderOpts) {
 		num := i + 1
 
 		fmt.Println(c(dim, "───"))
-		fmt.Printf("%s  %s  %s\n",
+
+		matchTag := ""
+		if hasExactProgramMatch(p, opts.Query) {
+			matchTag = " " + c(bold+green, "*")
+		}
+
+		fmt.Printf("%s  %s  %s%s\n",
 			c(cyan, fmt.Sprintf("[%d]", num)),
 			c(bold+green, p.PackageAttrName),
 			c(dim, nvl(p.PackageVersion, "?")),
+			matchTag,
 		)
 		fmt.Printf("     %s\n", highlight(nvl(p.PackageDescription, "-"), opts.Query))
 
@@ -80,6 +87,10 @@ func renderResults(hits []ESHit, opts RenderOpts) {
 		}
 
 		if num == 1 {
+			if hp := homepage(p); hp != "" {
+				fmt.Printf("     %s     %s\n", c(yellow, "home"), hp)
+			}
+			fmt.Printf("     %s\n", c(dim, "nix profile install nixpkgs#"+p.PackageAttrName))
 			fmt.Printf("     %s\n", c(dim, "nix-env -iA nixpkgs."+p.PackageAttrName))
 		}
 	}
@@ -96,17 +107,24 @@ func renderResultsVerbose(hits []ESHit, opts RenderOpts) {
 		num := i + 1
 
 		fmt.Println(c(dim, "───"))
-		fmt.Printf("%s  %s  %s\n",
+
+		matchTag := ""
+		if hasExactProgramMatch(p, opts.Query) {
+			matchTag = " " + c(bold+green, "*")
+		}
+
+		fmt.Printf("%s  %s  %s%s\n",
 			c(cyan, fmt.Sprintf("[%d]", num)),
 			c(bold+green, p.PackageAttrName),
 			c(dim, nvl(p.PackageVersion, "?")),
+			matchTag,
 		)
 		fmt.Printf("     %s\n", highlight(nvl(p.PackageDescription, "-"), opts.Query))
 
 		if len(p.PackagePrograms) > 0 {
 			fmt.Printf("     %s %s\n",
 				c(magenta, "programs"),
-				strings.Join(p.PackagePrograms, "  "),
+				peekPrograms(p.PackagePrograms, 10, opts.Query),
 			)
 		}
 
@@ -119,6 +137,7 @@ func renderResultsVerbose(hits []ESHit, opts RenderOpts) {
 		}
 
 		if num == 1 {
+			fmt.Printf("     %s\n", c(dim, "nix profile install nixpkgs#"+p.PackageAttrName))
 			fmt.Printf("     %s\n", c(dim, "nix-env -iA nixpkgs."+p.PackageAttrName))
 		}
 	}
@@ -128,7 +147,7 @@ func renderResultsVerbose(hits []ESHit, opts RenderOpts) {
 
 func printSummary(count int, opts RenderOpts) {
 	fmt.Println()
-	fmt.Println(c(dim, fmt.Sprintf("channel: %s  query: '%s'  showing %d of %d results  %dms",
+	fmt.Println(c(dim, fmt.Sprintf("channel: %s | query: '%s' | showing %d of %d | %dms",
 		opts.Channel, opts.Query, count, opts.Total, opts.Elapsed.Milliseconds())))
 }
 
@@ -187,6 +206,19 @@ func peekPrograms(progs []string, max int, query string) string {
 		return strings.Join(ordered, "  ")
 	}
 	return strings.Join(ordered[:max], "  ") + fmt.Sprintf("  (+%d more)", len(ordered)-max)
+}
+
+func hasExactProgramMatch(p SearchResult, query string) bool {
+	if query == "" {
+		return false
+	}
+	q := strings.ToLower(query)
+	for _, prog := range p.PackagePrograms {
+		if strings.ToLower(prog) == q {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesAnyTerm(prog string, terms []string) bool {

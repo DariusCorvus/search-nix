@@ -736,19 +736,6 @@ func (m model) detailLineCount(idx int) int {
 	return lines
 }
 
-func hasExactProgramMatch(p SearchResult, query string) bool {
-	if query == "" {
-		return false
-	}
-	q := strings.ToLower(query)
-	for _, prog := range p.PackagePrograms {
-		if strings.ToLower(prog) == q {
-			return true
-		}
-	}
-	return false
-}
-
 func truncate(s string, maxLen int) string {
 	if maxLen <= 0 {
 		return s
