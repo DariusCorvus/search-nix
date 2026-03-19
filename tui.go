@@ -17,6 +17,7 @@ type tuiState int
 
 const (
 	stateInput   tuiState = iota
+	stateChannel
 	stateResults
 	stateHelp
 )
@@ -93,6 +94,7 @@ var (
 
 func initialModel(channel, altChannel string, size int, initialQuery string) model {
 	ti := textinput.New()
+	ti.Prompt = ""
 	ti.Placeholder = "search nixos packages..."
 	ti.Focus()
 	ti.CharLimit = 256
@@ -210,7 +212,7 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = m.prevState
 			return m, nil
 		}
-		if m.state == stateResults {
+		if m.state == stateResults || m.state == stateChannel {
 			m.prevState = m.state
 			m.state = stateHelp
 			return m, nil
@@ -219,6 +221,11 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.state == stateHelp {
 			m.state = m.prevState
 			return m, nil
+		}
+		if m.state == stateChannel {
+			m.state = stateInput
+			m.textInput.Focus()
+			return m, textinput.Blink
 		}
 		if m.expanded >= 0 {
 			m.expanded = -1
@@ -241,6 +248,11 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	case "enter":
+		if m.state == stateChannel {
+			m.state = stateInput
+			m.textInput.Focus()
+			return m, textinput.Blink
+		}
 		if m.state == stateResults && len(m.results) > 0 {
 			// Toggle expanded detail inline
 			if m.expanded == m.cursor {
@@ -258,15 +270,43 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "up", "k":
+		if m.state == stateChannel {
+			return m, nil
+		}
+		if m.state == stateInput {
+			if m.altChannel != "" {
+				m.state = stateChannel
+				m.textInput.Blur()
+			}
+			return m, nil
+		}
 		if m.state == stateResults && len(m.results) > 0 {
 			if m.cursor > 0 {
 				m.cursor--
+				m.expanded = m.cursor
+				m.ensureVisible()
+			} else {
+				m.state = stateInput
+				m.textInput.Focus()
+				m.expanded = -1
+				return m, textinput.Blink
 			}
-			m.expanded = m.cursor
-			m.ensureVisible()
 		}
 		return m, nil
 	case "down", "j":
+		if m.state == stateChannel {
+			m.state = stateInput
+			m.textInput.Focus()
+			return m, textinput.Blink
+		}
+		if m.state == stateInput && len(m.results) > 0 {
+			m.state = stateResults
+			m.textInput.Blur()
+			m.cursor = 0
+			m.expanded = 0
+			m.ensureVisible()
+			return m, nil
+		}
 		if m.state == stateResults && len(m.results) > 0 {
 			if m.cursor < len(m.results)-1 {
 				m.cursor++
@@ -280,6 +320,20 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case "left", "right":
+		if m.state == stateChannel && m.altChannel != "" && !m.searching {
+			m.channel, m.altChannel = m.altChannel, m.channel
+			m.results = nil
+			m.total = 0
+			m.cursor = 0
+			m.scroll = 0
+			m.expanded = -1
+			if m.textInput.Value() != "" {
+				m.searching = true
+				return m, m.doSearch()
+			}
+			return m, nil
+		}
 	case "y":
 		if m.state == stateResults && len(m.results) > 0 {
 			name := m.results[m.cursor].Source.PackageAttrName
@@ -315,18 +369,10 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "c":
-		if m.state == stateResults && m.altChannel != "" && !m.searching {
-			m.channel, m.altChannel = m.altChannel, m.channel
-			m.results = nil
-			m.total = 0
-			m.cursor = 0
-			m.scroll = 0
-			m.expanded = -1
-			if m.textInput.Value() != "" {
-				m.searching = true
-				return m, tea.Batch(m.doSearch(), m.flash("Channel: "+m.channel))
-			}
-			return m, m.flash("Channel: " + m.channel)
+		if m.state == stateResults && m.altChannel != "" {
+			m.state = stateChannel
+			m.textInput.Blur()
+			return m, nil
 		}
 	case "/", "tab":
 		m.textInput.Focus()
@@ -401,9 +447,18 @@ func (m model) View() string {
 	var b strings.Builder
 
 	// Status bar
-	left := fmt.Sprintf(" Channel: %s", m.channel)
-	if m.altChannel != "" {
-		left += "  " + dimStyle.Render(m.altChannel+" [c]")
+	var left string
+	if m.state == stateChannel {
+		left = " Channel: " + selectedStyle.Bold(true).Foreground(lipgloss.Color("6")).Render(m.channel)
+		if m.altChannel != "" {
+			left += "  " + dimStyle.Render(m.altChannel)
+		}
+		left += "  " + dimStyle.Render("←/→ switch")
+	} else {
+		left = fmt.Sprintf(" Channel: %s", m.channel)
+		if m.altChannel != "" {
+			left += "  " + dimStyle.Render(m.altChannel)
+		}
 	}
 	b.WriteString(statusStyle.Width(m.width).Render(left))
 	b.WriteString("\n")
@@ -433,8 +488,22 @@ func (m model) View() string {
 			botLeft += "  loading more..."
 		}
 	}
-	botRight := "?:help  c:ch  y:copy  r:shell  o:open  q:quit "
-	botGap := m.width - lipgloss.Width(botLeft) - lipgloss.Width(botRight)
+	help := " ?:help "
+	hints := []string{"/:search", "c:channel", "y:copy", "r:shell", "o:open", "q:quit"}
+	// Build right side by adding hints right-to-left until space runs out
+	// ?:help is always shown as the rightmost label
+	helpW := lipgloss.Width(help)
+	leftW := lipgloss.Width(botLeft)
+	available := m.width - leftW - helpW - 1 // 1 for min gap
+	var shownHints string
+	for _, h := range hints {
+		candidate := h + "  "
+		if lipgloss.Width(candidate)+lipgloss.Width(shownHints) <= available {
+			shownHints += candidate
+		}
+	}
+	botRight := shownHints + help
+	botGap := m.width - leftW - lipgloss.Width(botRight)
 	if botGap < 1 {
 		botGap = 1
 	}
@@ -551,10 +620,11 @@ func (m model) viewHelp() string {
 
 	bindings := []struct{ k, desc string }{
 		{"Enter", "Search (in input) / Toggle detail (in results)"},
-		{"j / Down", "Move cursor down"},
-		{"k / Up", "Move cursor up"},
+		{"j / Down", "Move cursor down / next section"},
+		{"k / Up", "Move cursor up / prev section"},
+		{"Left/Right", "Switch channel (in channel bar)"},
+		{"c", "Jump to channel selector"},
 		{"/ / Tab", "Focus search input"},
-		{"c", "Switch channel"},
 		{"y", "Copy package name"},
 		{"e", "Copy nix-env install command"},
 		{"p", "Copy nix profile install command"},
