@@ -346,7 +346,13 @@ func (m model) viewResults() string {
 			verStr := versionStyle.Render(nvl(p.PackageVersion, "?"))
 			descStr := nvl(p.PackageDescription, "-")
 
-			line1 := fmt.Sprintf("%s%s %s  %s", marker, numStr, nameStr, verStr)
+			exactMatch := hasExactProgramMatch(p, m.textInput.Value())
+			matchTag := ""
+			if exactMatch {
+				matchTag = "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true).Render("*")
+			}
+
+			line1 := fmt.Sprintf("%s%s %s  %s%s", marker, numStr, nameStr, verStr, matchTag)
 			line2 := fmt.Sprintf("      %s", truncate(descStr, m.width-7))
 
 			if selected {
@@ -435,6 +441,19 @@ func (m model) detailLineCount(idx int) int {
 		lines++
 	}
 	return lines
+}
+
+func hasExactProgramMatch(p SearchResult, query string) bool {
+	if query == "" {
+		return false
+	}
+	q := strings.ToLower(query)
+	for _, prog := range p.PackagePrograms {
+		if strings.ToLower(prog) == q {
+			return true
+		}
+	}
+	return false
 }
 
 func truncate(s string, maxLen int) string {
