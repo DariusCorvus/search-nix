@@ -67,15 +67,27 @@ search-nix -t fuser        # start with pre-filled query and immediate search
 | Key | Action |
 |-----|--------|
 | Type + `Enter` | Search for the query |
-| `j` / `Down` | Move cursor down |
-| `k` / `Up` | Move cursor up |
+| `j` / `Down` | Move cursor down / next section |
+| `k` / `Up` | Move cursor up / prev section |
 | `Enter` (on result) | Toggle inline detail (programs, homepage, license, install command) |
+| `Space` | Pin/unpin detail open (stays open when moving cursor) |
+| `a` | Toggle expand/collapse all details |
+| `Left` / `Right` | Switch channel (when channel bar is focused) |
+| `c` | Jump to channel selector |
 | `/` or `Tab` | Refocus search input |
+| `y` | Copy package name |
+| `e` | Copy nix-env install command |
+| `p` | Copy nix profile install command |
+| `r` | Open nix-shell with package |
+| `o` | Open homepage in browser |
 | `Esc` | Collapse detail / clear input / quit |
 | `q` | Quit (from results) |
+| `?` | Toggle help page |
 | `Ctrl+C` | Quit (always) |
 
-Pressing `Enter` on a result expands its details inline below it (like an HTML `<details>` element). Press `Enter` again or `Esc` to collapse. Navigating with `j`/`k` also collapses any open detail.
+Navigation flows vertically through three sections: **channel bar** → **search input** → **results**. Press `Up` from the first result to focus the search input, and `Up` again to focus the channel bar where `Left`/`Right` switches channels.
+
+Pressing `Enter` on a result expands its details inline. `Space` pins a result open so it stays expanded as you navigate. `a` toggles expand-all mode which persists across searches.
 
 ## Channel detection
 

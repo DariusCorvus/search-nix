@@ -49,7 +49,9 @@ type model struct {
 	total     int
 	elapsed   time.Duration
 	cursor   int
-	expanded int // index of expanded result, -1 if none
+	expanded  int            // index of auto-expanded result (follows cursor), -1 if none
+	pinned    map[int]bool   // indices pinned open via space
+	expandAll bool           // all results expanded
 	scroll   int
 	searching   bool
 	loadingMore bool
@@ -107,6 +109,7 @@ func initialModel(channel, altChannel string, size int, initialQuery string) mod
 		size:       size,
 		state:      stateInput,
 		expanded:   -1,
+		pinned:     make(map[int]bool),
 		textInput:  ti,
 	}
 }
@@ -171,6 +174,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.elapsed = msg.elapsed
 		m.cursor = 0
 		m.scroll = 0
+		m.pinned = make(map[int]bool)
 		if len(m.results) > 0 {
 			m.state = stateResults
 			m.expanded = 0
@@ -240,6 +244,7 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.results = nil
 		m.total = 0
 		m.expanded = -1
+		m.pinned = make(map[int]bool)
 		m.state = stateInput
 		m.err = nil
 		return m, nil
@@ -328,10 +333,27 @@ func (m model) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 			m.scroll = 0
 			m.expanded = -1
+			m.pinned = make(map[int]bool)
 			if m.textInput.Value() != "" {
 				m.searching = true
 				return m, m.doSearch()
 			}
+			return m, nil
+		}
+	case " ":
+		if m.state == stateResults && len(m.results) > 0 {
+			if m.pinned[m.cursor] {
+				delete(m.pinned, m.cursor)
+			} else {
+				m.pinned[m.cursor] = true
+			}
+			m.ensureVisible()
+			return m, nil
+		}
+	case "a":
+		if m.state == stateResults && len(m.results) > 0 {
+			m.expandAll = !m.expandAll
+			m.ensureVisible()
 			return m, nil
 		}
 	case "y":
@@ -423,7 +445,7 @@ func (m model) linesFromTo(from, to int) int {
 			lines++ // separator
 		}
 		lines += 2 // summary: name+version, description
-		if i == m.expanded {
+		if m.isExpanded(i) {
 			lines += m.detailLineCount(i)
 		}
 	}
@@ -534,7 +556,7 @@ func (m model) viewResults() string {
 		linesUsed := 0
 		for i := m.scroll; i < len(m.results); i++ {
 			needed := 2
-			isExpanded := i == m.expanded
+			isExpanded := m.isExpanded(i)
 			if isExpanded {
 				needed += m.detailLineCount(i)
 			}
@@ -620,6 +642,8 @@ func (m model) viewHelp() string {
 
 	bindings := []struct{ k, desc string }{
 		{"Enter", "Search (in input) / Toggle detail (in results)"},
+		{"Space", "Pin/unpin detail open"},
+		{"a", "Expand/collapse all"},
 		{"j / Down", "Move cursor down / next section"},
 		{"k / Up", "Move cursor up / prev section"},
 		{"Left/Right", "Switch channel (in channel bar)"},
@@ -653,6 +677,10 @@ func (m model) viewHelp() string {
 	}
 
 	return b.String()
+}
+
+func (m model) isExpanded(idx int) bool {
+	return m.expandAll || idx == m.expanded || m.pinned[idx]
 }
 
 func (m model) renderInlineDetail(idx int) string {
