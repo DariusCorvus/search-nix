@@ -393,10 +393,19 @@ func (m model) renderInlineDetail(idx int) string {
 	indent := "       "
 
 	if len(p.PackagePrograms) > 0 {
+		query := strings.ToLower(m.textInput.Value())
+		var progs []string
+		for _, prog := range p.PackagePrograms {
+			if strings.EqualFold(prog, query) {
+				progs = append(progs, lipgloss.NewStyle().Bold(true).Underline(true).Render(prog))
+			} else {
+				progs = append(progs, prog)
+			}
+		}
 		b.WriteString(fmt.Sprintf("%s%s  %s\n",
 			indent,
 			programsLabelStyle.Render("programs"),
-			strings.Join(p.PackagePrograms, "  "),
+			strings.Join(progs, "  "),
 		))
 	}
 	if hp := homepage(p); hp != "" {
