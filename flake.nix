@@ -18,6 +18,10 @@
           src = ./.;
           # Run `nix build` once to get the correct hash from the error message
           vendorHash = "sha256-SyGX4R4X7uFiZlmpa7wD1MDFF3tNw/cjg2XWUiCqX7E=";
+          meta = {
+            description = "Search NixOS packages from the terminal";
+            license = pkgs.lib.licenses.mit;
+          };
         };
 
         devShells.default = pkgs.mkShell {
