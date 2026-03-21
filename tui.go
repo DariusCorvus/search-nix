@@ -443,7 +443,7 @@ func (m model) linesFromTo(from, to int) int {
 		if i > from {
 			lines++ // separator
 		}
-		lines += 2 // summary: name+version, description
+		lines += 1 + m.descLineCount(i) // name+version + description
 		if m.isExpanded(i) {
 			lines += m.detailLineCount(i)
 		}
@@ -554,8 +554,8 @@ func (m model) viewResults() string {
 	} else {
 		linesUsed := 0
 		for i := m.scroll; i < len(m.results); i++ {
-			needed := 2
 			isExpanded := m.isExpanded(i)
+			needed := 1 + m.descLineCount(i)
 			if isExpanded {
 				needed += m.detailLineCount(i)
 			}
@@ -581,16 +581,28 @@ func (m model) viewResults() string {
 			numStr := numStyle.Render(fmt.Sprintf("[%d]", num))
 			nameStr := pkgNameStyle.Render(p.PackageAttrName)
 			verStr := versionStyle.Render(nvl(p.PackageVersion, "?"))
-			descStr := tuiHighlight(nvl(p.PackageDescription, "-"), m.textInput.Value())
+			rawDesc := nvl(p.PackageDescription, "-")
+			query := m.textInput.Value()
 
-			exactMatch := hasExactProgramMatch(p, m.textInput.Value())
+			exactMatch := hasExactProgramMatch(p, query)
 			matchTag := ""
 			if exactMatch {
 				matchTag = "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true).Render("*")
 			}
 
 			line1 := fmt.Sprintf(" %s %s  %s%s", numStr, nameStr, verStr, matchTag)
-			line2 := fmt.Sprintf("      %s", truncate(descStr, m.width-7))
+
+			// Build description lines: wrap when expanded, truncate otherwise
+			indent := "      "
+			avail := m.width - len(indent) - 1
+			var descLines []string
+			if isExpanded && len(rawDesc) > avail {
+				for _, wl := range wordWrap(rawDesc, avail) {
+					descLines = append(descLines, indent+tuiHighlight(wl, query))
+				}
+			} else {
+				descLines = []string{indent + tuiHighlight(truncate(rawDesc, avail), query)}
+			}
 
 			if selected {
 				bg := "\033[48;5;236m"
@@ -598,19 +610,23 @@ func (m model) viewResults() string {
 				if pad1 < 0 {
 					pad1 = 0
 				}
-				pad2 := m.width - lipgloss.Width(line2)
-				if pad2 < 0 {
-					pad2 = 0
-				}
 				line1 = bg + line1 + strings.Repeat(" ", pad1) + reset
-				line2 = bg + line2 + strings.Repeat(" ", pad2) + reset
+				for di, dl := range descLines {
+					pad := m.width - lipgloss.Width(dl)
+					if pad < 0 {
+						pad = 0
+					}
+					descLines[di] = bg + dl + strings.Repeat(" ", pad) + reset
+				}
 			}
 
 			b.WriteString(line1)
 			b.WriteString("\n")
-			b.WriteString(line2)
-			b.WriteString("\n")
-			linesUsed += 2
+			for _, dl := range descLines {
+				b.WriteString(dl)
+				b.WriteString("\n")
+			}
+			linesUsed += 1 + m.descLineCount(i)
 
 			if isExpanded {
 				detail := m.renderInlineDetail(i)
@@ -722,6 +738,20 @@ func (m model) renderInlineDetail(idx int) string {
 	return b.String()
 }
 
+// descLineCount returns how many terminal lines the description occupies.
+// When expanded, the full description wraps; otherwise it's truncated to 1 line.
+func (m model) descLineCount(idx int) int {
+	if !m.isExpanded(idx) || m.width <= 7 {
+		return 1
+	}
+	desc := nvl(m.results[idx].Source.PackageDescription, "-")
+	avail := m.width - 6 - 1 // "      " indent
+	if avail <= 0 || len(desc) <= avail {
+		return 1
+	}
+	return len(wordWrap(desc, avail))
+}
+
 func (m model) detailLineCount(idx int) int {
 	if idx < 0 || idx >= len(m.results) {
 		return 0
@@ -759,6 +789,32 @@ func tuiHighlight(s string, query string) string {
 	return re.ReplaceAllStringFunc(s, func(match string) string {
 		return highlightStyle.Render(match)
 	})
+}
+
+// wordWrap breaks s into lines of at most maxWidth visible characters,
+// splitting at word boundaries. It is ANSI-unaware so should be called
+// before highlighting.
+func wordWrap(s string, maxWidth int) []string {
+	if maxWidth <= 0 || len(s) <= maxWidth {
+		return []string{s}
+	}
+	words := strings.Fields(s)
+	var lines []string
+	cur := ""
+	for _, w := range words {
+		if cur == "" {
+			cur = w
+		} else if len(cur)+1+len(w) <= maxWidth {
+			cur += " " + w
+		} else {
+			lines = append(lines, cur)
+			cur = w
+		}
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	return lines
 }
 
 func truncate(s string, maxLen int) string {
