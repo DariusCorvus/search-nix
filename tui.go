@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 
@@ -26,6 +25,8 @@ const (
 type clearFlashMsg struct{}
 
 type shellDoneMsg struct{ err error }
+
+type altChannelMsg struct{ channel string }
 
 type searchDoneMsg struct {
 	results []ESHit
@@ -93,7 +94,7 @@ var (
 
 )
 
-func initialModel(channel, altChannel string, size int, initialQuery string) model {
+func initialModel(channel string, size int, initialQuery string) model {
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.Placeholder = "search nixos packages..."
@@ -103,22 +104,31 @@ func initialModel(channel, altChannel string, size int, initialQuery string) mod
 	ti.SetValue(initialQuery)
 
 	return model{
-		channel:    channel,
-		altChannel: altChannel,
-		size:       size,
-		state:      stateInput,
-		expanded:   -1,
-		pinned:     make(map[int]bool),
-		textInput:  ti,
+		channel:   channel,
+		size:      size,
+		state:     stateInput,
+		expanded:  -1,
+		pinned:    make(map[int]bool),
+		textInput: ti,
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{textinput.Blink}
+	cmds := []tea.Cmd{
+		textinput.Blink,
+		m.detectAltChannelCmd(),
+	}
 	if m.textInput.Value() != "" {
 		cmds = append(cmds, m.doSearch())
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m model) detectAltChannelCmd() tea.Cmd {
+	channel := m.channel
+	return func() tea.Msg {
+		return altChannelMsg{channel: detectAltChannel(channel)}
+	}
 }
 
 func (m model) doSearch() tea.Cmd {
@@ -158,6 +168,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.textInput.Width = min(msg.Width-4, 80)
+		return m, nil
+
+	case altChannelMsg:
+		if m.altChannel == "" {
+			m.altChannel = msg.channel
+		}
 		return m, nil
 
 	case searchDoneMsg:
@@ -790,13 +806,8 @@ func tuiHighlight(s string, query string) string {
 	if query == "" {
 		return s
 	}
-	terms := strings.Fields(query)
-	var escaped []string
-	for _, t := range terms {
-		escaped = append(escaped, regexp.QuoteMeta(t))
-	}
-	re, err := regexp.Compile("(?i)" + strings.Join(escaped, "|"))
-	if err != nil {
+	re := queryRegex(query)
+	if re == nil {
 		return s
 	}
 	return re.ReplaceAllStringFunc(s, func(match string) string {
@@ -843,8 +854,8 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-func runTUI(channel, altChannel string, size int, initialQuery string) int {
-	m := initialModel(channel, altChannel, size, initialQuery)
+func runTUI(channel string, size int, initialQuery string) int {
+	m := initialModel(channel, size, initialQuery)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

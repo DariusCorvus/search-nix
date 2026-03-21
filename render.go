@@ -43,11 +43,20 @@ func c(code, s string) string {
 	return code + s + reset
 }
 
-func highlight(s string, query string) string {
-	if !hasColor || query == "" {
-		return s
+// queryRegexCache caches compiled regexes by query string.
+var queryRegexCache = struct {
+	query string
+	re    *regexp.Regexp
+}{}
+
+// queryRegex returns a cached compiled regex for the given query terms.
+func queryRegex(query string) *regexp.Regexp {
+	if query == "" {
+		return nil
 	}
-	// Build alternation of all query terms so each word highlights independently
+	if queryRegexCache.query == query {
+		return queryRegexCache.re
+	}
 	terms := strings.Fields(query)
 	var escaped []string
 	for _, t := range terms {
@@ -55,6 +64,19 @@ func highlight(s string, query string) string {
 	}
 	re, err := regexp.Compile("(?i)" + strings.Join(escaped, "|"))
 	if err != nil {
+		return nil
+	}
+	queryRegexCache.query = query
+	queryRegexCache.re = re
+	return re
+}
+
+func highlight(s string, query string) string {
+	if !hasColor || query == "" {
+		return s
+	}
+	re := queryRegex(query)
+	if re == nil {
 		return s
 	}
 	return re.ReplaceAllStringFunc(s, func(match string) string {
@@ -67,13 +89,8 @@ func highlightInline(s string, query string) string {
 	if !hasColor || query == "" {
 		return s
 	}
-	terms := strings.Fields(query)
-	var escaped []string
-	for _, t := range terms {
-		escaped = append(escaped, regexp.QuoteMeta(t))
-	}
-	re, err := regexp.Compile("(?i)" + strings.Join(escaped, "|"))
-	if err != nil {
+	re := queryRegex(query)
+	if re == nil {
 		return s
 	}
 	return re.ReplaceAllStringFunc(s, func(match string) string {
@@ -219,15 +236,13 @@ func licenses(p SearchResult) string {
 	return strings.Join(parts, ", ")
 }
 
+var htmlTagRe = regexp.MustCompile("<[^>]*>")
+
 // stripHTML removes HTML tags and cleans up a long description for terminal display.
 func stripHTML(s string) string {
-	// Remove <rendered-html> wrapper
 	s = strings.TrimPrefix(s, "<rendered-html>")
 	s = strings.TrimSuffix(s, "</rendered-html>")
-	// Strip all HTML tags
-	re := regexp.MustCompile("<[^>]*>")
-	s = re.ReplaceAllString(s, "")
-	// Collapse whitespace
+	s = htmlTagRe.ReplaceAllString(s, "")
 	s = strings.Join(strings.Fields(s), " ")
 	return strings.TrimSpace(s)
 }

@@ -6,18 +6,22 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
 
-var versionRe = regexp.MustCompile(`^(\d+\.\d+)`)
+var (
+	versionRe   = regexp.MustCompile(`^(\d+\.\d+)`)
+	probeClient = &http.Client{Timeout: 3 * time.Second}
+)
 
 func probeChannel(ch string) bool {
 	url := fmt.Sprintf("https://search.nixos.org/backend/latest-%s-nixos-%s", esSchema, ch)
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("HEAD", url, nil)
 	if err != nil {
 		return false
 	}
 	req.SetBasicAuth(esUser, esPass)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := probeClient.Do(req)
 	if err != nil {
 		return false
 	}
