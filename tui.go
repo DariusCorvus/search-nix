@@ -691,10 +691,18 @@ func (m model) renderInlineDetail(idx int) string {
 	indent := "       "
 
 	if len(p.PackagePrograms) > 0 {
-		var progs []string
+		// Partition: matching programs first, then the rest
+		query := m.textInput.Value()
+		terms := strings.Fields(strings.ToLower(query))
+		var matched, rest []string
 		for _, prog := range p.PackagePrograms {
-			progs = append(progs, tuiHighlight(prog, m.textInput.Value()))
+			if matchesAnyTerm(prog, terms) {
+				matched = append(matched, tuiHighlight(prog, query))
+			} else {
+				rest = append(rest, prog)
+			}
 		}
+		progs := append(matched, rest...)
 		b.WriteString(fmt.Sprintf("%s%s  %s\n",
 			indent,
 			programsLabelStyle.Render("programs"),
@@ -708,6 +716,8 @@ func (m model) renderInlineDetail(idx int) string {
 		b.WriteString(fmt.Sprintf("%s%s   %s\n", indent, labelStyle.Render("license"), lic))
 	}
 	b.WriteString(fmt.Sprintf("%s%s\n",
+		indent, dimStyle.Render("nix profile install nixpkgs#"+p.PackageAttrName)))
+	b.WriteString(fmt.Sprintf("%s%s\n",
 		indent, dimStyle.Render("nix-env -iA nixpkgs."+p.PackageAttrName)))
 	return b.String()
 }
@@ -717,7 +727,7 @@ func (m model) detailLineCount(idx int) int {
 		return 0
 	}
 	p := m.results[idx].Source
-	lines := 1 // install command always shown
+	lines := 2 // install commands always shown
 	if len(p.PackagePrograms) > 0 {
 		lines++
 	}
