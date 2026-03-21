@@ -36,7 +36,8 @@ type SearchResult struct {
 	PackagePrograms    []string    `json:"package_programs"`
 	PackageHomepage    any         `json:"package_homepage"`
 	PackageLicenseSet  []License   `json:"package_license_set"`
-	PackagePname       string      `json:"package_pname"`
+	PackagePname           string `json:"package_pname"`
+	PackageLongDescription string `json:"package_longDescription"`
 }
 
 // License can be either a string or an object with spdxId/fullName fields.

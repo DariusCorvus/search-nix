@@ -15,6 +15,7 @@ const (
 	bold    = "\033[1m"
 	dim     = "\033[2m"
 	ul      = "\033[4m"
+	noul    = "\033[24m"
 	reset   = "\033[0m"
 	cyan    = "\033[36m"
 	green   = "\033[32m"
@@ -61,6 +62,25 @@ func highlight(s string, query string) string {
 	})
 }
 
+// highlightInline underlines matching terms without resetting surrounding styles.
+func highlightInline(s string, query string) string {
+	if !hasColor || query == "" {
+		return s
+	}
+	terms := strings.Fields(query)
+	var escaped []string
+	for _, t := range terms {
+		escaped = append(escaped, regexp.QuoteMeta(t))
+	}
+	re, err := regexp.Compile("(?i)" + strings.Join(escaped, "|"))
+	if err != nil {
+		return s
+	}
+	return re.ReplaceAllStringFunc(s, func(match string) string {
+		return ul + match + noul
+	})
+}
+
 func renderResults(hits []ESHit, opts RenderOpts) {
 	count := len(hits)
 
@@ -72,13 +92,13 @@ func renderResults(hits []ESHit, opts RenderOpts) {
 		fmt.Println(c(dim, "───"))
 
 		matchTag := ""
-		if hasExactProgramMatch(p, opts.Query) {
+		if hasExactMatch(p, opts.Query) {
 			matchTag = " " + c(bold+green, "*")
 		}
 
 		fmt.Printf("%s  %s  %s%s\n",
 			c(cyan, fmt.Sprintf("[%d]", num)),
-			c(bold+green, p.PackageAttrName),
+			c(bold+green, highlightInline(p.PackageAttrName, opts.Query)),
 			c(dim, nvl(p.PackageVersion, "?")),
 			matchTag,
 		)
@@ -114,17 +134,21 @@ func renderResultsVerbose(hits []ESHit, opts RenderOpts) {
 		fmt.Println(c(dim, "───"))
 
 		matchTag := ""
-		if hasExactProgramMatch(p, opts.Query) {
+		if hasExactMatch(p, opts.Query) {
 			matchTag = " " + c(bold+green, "*")
 		}
 
 		fmt.Printf("%s  %s  %s%s\n",
 			c(cyan, fmt.Sprintf("[%d]", num)),
-			c(bold+green, p.PackageAttrName),
+			c(bold+green, highlightInline(p.PackageAttrName, opts.Query)),
 			c(dim, nvl(p.PackageVersion, "?")),
 			matchTag,
 		)
 		fmt.Printf("     %s\n", highlight(nvl(p.PackageDescription, "-"), opts.Query))
+
+		if ld := longDesc(p); ld != "" {
+			fmt.Printf("     %s\n", c(dim, ld))
+		}
 
 		if len(p.PackagePrograms) > 0 {
 			fmt.Printf("     %s %s\n",
@@ -195,6 +219,30 @@ func licenses(p SearchResult) string {
 	return strings.Join(parts, ", ")
 }
 
+// stripHTML removes HTML tags and cleans up a long description for terminal display.
+func stripHTML(s string) string {
+	// Remove <rendered-html> wrapper
+	s = strings.TrimPrefix(s, "<rendered-html>")
+	s = strings.TrimSuffix(s, "</rendered-html>")
+	// Strip all HTML tags
+	re := regexp.MustCompile("<[^>]*>")
+	s = re.ReplaceAllString(s, "")
+	// Collapse whitespace
+	s = strings.Join(strings.Fields(s), " ")
+	return strings.TrimSpace(s)
+}
+
+func longDesc(p SearchResult) string {
+	if p.PackageLongDescription == "" {
+		return ""
+	}
+	s := stripHTML(p.PackageLongDescription)
+	if s == p.PackageDescription {
+		return ""
+	}
+	return s
+}
+
 func peekPrograms(progs []string, max int, query string) string {
 	// Partition: matching programs first, then the rest
 	var matched, rest []string
@@ -213,11 +261,16 @@ func peekPrograms(progs []string, max int, query string) string {
 	return strings.Join(ordered[:max], "  ") + fmt.Sprintf("  (+%d more)", len(ordered)-max)
 }
 
-func hasExactProgramMatch(p SearchResult, query string) bool {
+func hasExactMatch(p SearchResult, query string) bool {
 	if query == "" {
 		return false
 	}
 	q := strings.ToLower(query)
+	// Check package name and attr name
+	if strings.ToLower(p.PackagePname) == q || strings.ToLower(p.PackageAttrName) == q {
+		return true
+	}
+	// Check programs
 	for _, prog := range p.PackagePrograms {
 		if strings.ToLower(prog) == q {
 			return true

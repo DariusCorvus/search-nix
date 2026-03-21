@@ -578,13 +578,13 @@ func (m model) viewResults() string {
 			num := i + 1
 			selected := i == m.cursor
 
+			query := m.textInput.Value()
 			numStr := numStyle.Render(fmt.Sprintf("[%d]", num))
-			nameStr := pkgNameStyle.Render(p.PackageAttrName)
+			nameStr := pkgNameStyle.Render(highlightInline(p.PackageAttrName, query))
 			verStr := versionStyle.Render(nvl(p.PackageVersion, "?"))
 			rawDesc := nvl(p.PackageDescription, "-")
-			query := m.textInput.Value()
 
-			exactMatch := hasExactProgramMatch(p, query)
+			exactMatch := hasExactMatch(p, query)
 			matchTag := ""
 			if exactMatch {
 				matchTag = "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true).Render("*")
@@ -706,6 +706,13 @@ func (m model) renderInlineDetail(idx int) string {
 	var b strings.Builder
 	indent := "       "
 
+	if ld := longDesc(p); ld != "" {
+		avail := m.width - len(indent) - 1
+		for _, wl := range wordWrap(ld, avail) {
+			b.WriteString(fmt.Sprintf("%s%s\n", indent, dimStyle.Render(wl)))
+		}
+	}
+
 	if len(p.PackagePrograms) > 0 {
 		// Partition: matching programs first, then the rest
 		query := m.textInput.Value()
@@ -758,6 +765,12 @@ func (m model) detailLineCount(idx int) int {
 	}
 	p := m.results[idx].Source
 	lines := 2 // install commands always shown
+	if ld := longDesc(p); ld != "" {
+		avail := m.width - 7 - 1
+		if avail > 0 {
+			lines += len(wordWrap(ld, avail))
+		}
+	}
 	if len(p.PackagePrograms) > 0 {
 		lines++
 	}
