@@ -25,7 +25,7 @@ Go CLI tool that searches NixOS packages by querying the search.nixos.org Elasti
 
 ## Dependencies
 
-Build: Go compiler. External deps: `golang.org/x/term` (tty detection), `charmbracelet/bubbletea` + `bubbles` + `lipgloss` (TUI). No runtime dependencies — produces a static binary.
+Build: Go compiler. External deps: `golang.org/x/term` (tty detection), `charmbracelet/bubbletea` + `bubbles` + `lipgloss` (TUI), `atotto/clipboard` (clipboard copy). No runtime dependencies — produces a static binary.
 
 Dev shell via `nix develop` provides: `go`, `gopls`, `gotools`.
 
@@ -55,6 +55,7 @@ No test suite. Test manually:
 ## Key Details
 
 - ES credentials and schema version are hardcoded as constants in `search.go`
+- When Go deps change, update `vendorHash` in `flake.nix`: set to `""`, run `nix build`, copy hash from error
 - Results are displayed reversed (best match `[1]` at bottom of terminal)
 - Colors auto-disable when stdout is not a tty
 - `search-nix.sh` is the original bash implementation, kept for reference

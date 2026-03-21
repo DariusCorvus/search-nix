@@ -34,7 +34,7 @@ type SearchResult struct {
 	PackageVersion     string      `json:"package_pversion"`
 	PackageDescription string      `json:"package_description"`
 	PackagePrograms    []string    `json:"package_programs"`
-	PackageHomepage    interface{} `json:"package_homepage"`
+	PackageHomepage    any         `json:"package_homepage"`
 	PackageLicenseSet  []License   `json:"package_license_set"`
 	PackagePname       string      `json:"package_pname"`
 }

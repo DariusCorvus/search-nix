@@ -46,8 +46,13 @@ func highlight(s string, query string) string {
 	if !hasColor || query == "" {
 		return s
 	}
-	escaped := regexp.QuoteMeta(query)
-	re, err := regexp.Compile("(?i)" + escaped)
+	// Build alternation of all query terms so each word highlights independently
+	terms := strings.Fields(query)
+	var escaped []string
+	for _, t := range terms {
+		escaped = append(escaped, regexp.QuoteMeta(t))
+	}
+	re, err := regexp.Compile("(?i)" + strings.Join(escaped, "|"))
 	if err != nil {
 		return s
 	}

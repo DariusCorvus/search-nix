@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -90,8 +91,6 @@ var (
 	dimStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8"))
 
-	footerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("8"))
 )
 
 func initialModel(channel, altChannel string, size int, initialQuery string) model {
@@ -582,7 +581,7 @@ func (m model) viewResults() string {
 			numStr := numStyle.Render(fmt.Sprintf("[%d]", num))
 			nameStr := pkgNameStyle.Render(p.PackageAttrName)
 			verStr := versionStyle.Render(nvl(p.PackageVersion, "?"))
-			descStr := nvl(p.PackageDescription, "-")
+			descStr := tuiHighlight(nvl(p.PackageDescription, "-"), m.textInput.Value())
 
 			exactMatch := hasExactProgramMatch(p, m.textInput.Value())
 			matchTag := ""
@@ -692,14 +691,9 @@ func (m model) renderInlineDetail(idx int) string {
 	indent := "       "
 
 	if len(p.PackagePrograms) > 0 {
-		query := strings.ToLower(m.textInput.Value())
 		var progs []string
 		for _, prog := range p.PackagePrograms {
-			if strings.EqualFold(prog, query) {
-				progs = append(progs, lipgloss.NewStyle().Bold(true).Underline(true).Render(prog))
-			} else {
-				progs = append(progs, prog)
-			}
+			progs = append(progs, tuiHighlight(prog, m.textInput.Value()))
 		}
 		b.WriteString(fmt.Sprintf("%s%s  %s\n",
 			indent,
@@ -734,6 +728,27 @@ func (m model) detailLineCount(idx int) int {
 		lines++
 	}
 	return lines
+}
+
+var highlightStyle = lipgloss.NewStyle().Bold(true).Underline(true)
+
+// tuiHighlight highlights individual query terms in a string using lipgloss styling.
+func tuiHighlight(s string, query string) string {
+	if query == "" {
+		return s
+	}
+	terms := strings.Fields(query)
+	var escaped []string
+	for _, t := range terms {
+		escaped = append(escaped, regexp.QuoteMeta(t))
+	}
+	re, err := regexp.Compile("(?i)" + strings.Join(escaped, "|"))
+	if err != nil {
+		return s
+	}
+	return re.ReplaceAllStringFunc(s, func(match string) string {
+		return highlightStyle.Render(match)
+	})
 }
 
 func truncate(s string, maxLen int) string {
