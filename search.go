@@ -5,15 +5,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	esUser   = "aWVSALXpZv"
-	esPass   = "X8gPHnzL52wFEekuxsfQ9cSh"
-	esSchema = "44"
+	esUser = "aWVSALXpZv"
+	esPass = "X8gPHnzL52wFEekuxsfQ9cSh"
 )
+
+// esSchema is the Elasticsearch index schema version. NixOS bumps this
+// periodically with no notice; the value here is the latest known at build
+// time, but it is overridden at runtime by the on-disk cache and by the
+// retry-on-404 probe in searchFrom.
+var esSchema = "48"
 
 type ESResponse struct {
 	Hits struct {
@@ -72,6 +80,10 @@ func search(query string, channel string, size int) (*ESResponse, time.Duration,
 }
 
 func searchFrom(query string, channel string, size int, from int) (*ESResponse, time.Duration, error) {
+	return searchAttempt(query, channel, size, from, false)
+}
+
+func searchAttempt(query string, channel string, size int, from int, retried bool) (*ESResponse, time.Duration, error) {
 	url := fmt.Sprintf("https://search.nixos.org/backend/latest-%s-nixos-%s/_search", esSchema, channel)
 
 	payload := buildQuery(query, size, from)
@@ -104,17 +116,112 @@ func searchFrom(query string, channel string, size int, from int) (*ESResponse, 
 	}
 
 	if esResp.Error != nil {
-		// Try to extract reason from error
 		var errObj struct {
 			Reason string `json:"reason"`
 		}
-		if json.Unmarshal(*esResp.Error, &errObj) == nil && errObj.Reason != "" {
-			return nil, 0, fmt.Errorf("%s", errObj.Reason)
+		reason := ""
+		if json.Unmarshal(*esResp.Error, &errObj) == nil {
+			reason = errObj.Reason
+		}
+
+		if !retried && strings.Contains(reason, "no such index") {
+			if newSchema, ok := resolveSchema(channel); ok {
+				esSchema = newSchema
+				saveCachedSchema(newSchema)
+				return searchAttempt(query, channel, size, from, true)
+			}
+		}
+
+		if reason != "" {
+			return nil, 0, fmt.Errorf("%s", reason)
 		}
 		return nil, 0, fmt.Errorf("elasticsearch error: %s", string(*esResp.Error))
 	}
 
 	return &esResp, elapsed, nil
+}
+
+// resolveSchema HEAD-probes nearby schema versions to find a working index for
+// the given channel. It scans cur+5 down to cur+1 first (returning the highest
+// live schema above the current value), then cur-1 down to cur-5 as a fallback
+// for the rare case where the server rolls back. Returns the resolved schema
+// string and true on success.
+func resolveSchema(channel string) (string, bool) {
+	cur, err := strconv.Atoi(esSchema)
+	if err != nil {
+		return "", false
+	}
+	for k := 5; k >= 1; k-- {
+		cand := strconv.Itoa(cur + k)
+		if probeSchema(cand, channel) {
+			return cand, true
+		}
+	}
+	for k := 1; k <= 5; k++ {
+		n := cur - k
+		if n < 1 {
+			break
+		}
+		cand := strconv.Itoa(n)
+		if probeSchema(cand, channel) {
+			return cand, true
+		}
+	}
+	return "", false
+}
+
+func probeSchema(schema, channel string) bool {
+	url := fmt.Sprintf("https://search.nixos.org/backend/latest-%s-nixos-%s", schema, channel)
+	req, err := http.NewRequest("HEAD", url, nil)
+	if err != nil {
+		return false
+	}
+	req.SetBasicAuth(esUser, esPass)
+	resp, err := probeClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == 200
+}
+
+func cacheSchemaPath() string {
+	base := os.Getenv("XDG_CACHE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		base = filepath.Join(home, ".cache")
+	}
+	return filepath.Join(base, "search-nix", "schema")
+}
+
+func loadCachedSchema() {
+	p := cacheSchemaPath()
+	if p == "" {
+		return
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	s := strings.TrimSpace(string(data))
+	if _, err := strconv.Atoi(s); err != nil {
+		return
+	}
+	esSchema = s
+}
+
+func saveCachedSchema(schema string) {
+	p := cacheSchemaPath()
+	if p == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(p, []byte(schema+"\n"), 0o644)
 }
 
 func buildQuery(query string, size int, from int) string {

@@ -47,6 +47,8 @@ func main() {
 
 	query := strings.Join(positional, " ")
 
+	loadCachedSchema()
+
 	if channel == "" {
 		channel = detectChannel()
 	}
